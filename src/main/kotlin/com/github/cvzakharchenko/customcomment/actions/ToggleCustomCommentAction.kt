@@ -24,8 +24,31 @@ import com.intellij.openapi.vfs.VirtualFile
  * - Works with multiple cursors/carets
  * - Respects insertPosition setting for comment positioning
  * - Moves cursor to next line after action (only if single cursor with no selection)
+ * - Maintains alignment across consecutive line-by-line invocations
  */
 class ToggleCustomCommentAction : AnAction(), DumbAware {
+    
+    /**
+     * Companion object for tracking alignment state across invocations.
+     * This allows alignment to be maintained when executing the action line-by-line.
+     */
+    companion object {
+        // Track the last aligned column for consecutive line execution
+        private var lastAlignedColumn: Int? = null
+        // Track which file the last alignment was in
+        private var lastFilePath: String? = null
+        // Track the last line index to detect consecutive lines
+        private var lastLineIndex: Int? = null
+        
+        /**
+         * Resets the alignment tracking state.
+         */
+        fun resetAlignmentState() {
+            lastAlignedColumn = null
+            lastFilePath = null
+            lastLineIndex = null
+        }
+    }
     
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
     
@@ -54,9 +77,10 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         // Check if we should move to next line after action
         // Only move if there's a single cursor with no selection
         val shouldMoveToNextLine = shouldMoveCaretAfterAction(editor)
+        val filePath = file.path
         
         WriteCommandAction.runWriteCommandAction(project) {
-            processAllCarets(project, editor, config)
+            processAllCarets(project, editor, config, filePath)
         }
         
         // Move caret to next line only if single cursor with no selection
@@ -101,17 +125,70 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     
     /**
      * Processes all carets in the editor.
+     * Deduplicates lines so each line is only processed once, even if multiple cursors are on it.
      */
-    private fun processAllCarets(project: Project, editor: Editor, config: CommentConfiguration) {
+    private fun processAllCarets(project: Project, editor: Editor, config: CommentConfiguration, filePath: String) {
         val document = editor.document
         val caretModel = editor.caretModel
         
-        // Process each caret
-        // We need to process from bottom to top to avoid line number changes affecting later carets
-        val carets = caretModel.allCarets.sortedByDescending { it.offset }
+        // Collect all unique lines from all carets
+        val allLines = mutableSetOf<Int>()
+        var firstLineOfFirstCaret: Int? = null
         
-        for (caret in carets) {
-            processCaret(document, caret, config)
+        // Process carets sorted by offset to find the first line correctly
+        val caretsSortedByOffset = caretModel.allCarets.sortedBy { it.offset }
+        
+        for (caret in caretsSortedByOffset) {
+            val (startLine, endLine) = getSelectedLines(document, caret)
+            
+            // Track the first line of the first caret for determining add/remove
+            if (firstLineOfFirstCaret == null) {
+                firstLineOfFirstCaret = startLine
+            }
+            
+            for (lineNum in startLine..endLine) {
+                allLines.add(lineNum)
+            }
+        }
+        
+        if (allLines.isEmpty() || firstLineOfFirstCaret == null) return
+        
+        // Determine action based on first line of first caret
+        val firstLineText = getLineText(document, firstLineOfFirstCaret)
+        val shouldRemove = hasAnyCommentPrefix(firstLineText, config)
+        
+        // Check if we're continuing from the previous invocation (consecutive line)
+        val minLine = allLines.minOrNull() ?: return
+        val maxLine = allLines.maxOrNull() ?: return
+        
+        val continuing = filePath == lastFilePath &&
+                         lastLineIndex != null &&
+                         minLine == lastLineIndex!! + 1
+        
+        // Get the starting column for alignment
+        var currentColumn: Int? = if (continuing && config.insertPosition == InsertPosition.ALIGN_WITH_PREVIOUS) {
+            lastAlignedColumn
+        } else {
+            null
+        }
+        
+        // Process all unique lines
+        if (shouldRemove) {
+            // Reset alignment state when removing
+            resetAlignmentState()
+            // Process from bottom to top to avoid offset issues
+            for (lineNum in allLines.sortedDescending()) {
+                removeCommentFromLine(document, lineNum, config)
+            }
+        } else {
+            // Process from top to bottom for proper alignment tracking
+            for (lineNum in allLines.sorted()) {
+                currentColumn = addCommentToLine(document, lineNum, config, currentColumn)
+            }
+            // Save alignment state for next invocation
+            lastAlignedColumn = currentColumn
+            lastFilePath = filePath
+            lastLineIndex = maxLine
         }
     }
     
@@ -130,29 +207,6 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
             // Move to the beginning of the next line
             val nextLineStart = document.getLineStartOffset(nextLine)
             caret.moveToOffset(nextLineStart)
-        }
-    }
-    
-    /**
-     * Processes a single caret/selection.
-     */
-    private fun processCaret(document: Document, caret: Caret, config: CommentConfiguration) {
-        val (startLine, endLine) = getSelectedLines(document, caret)
-        
-        // Determine action based on first line
-        val firstLineText = getLineText(document, startLine)
-        val shouldRemove = hasAnyCommentPrefix(firstLineText, config)
-        
-        // Process all lines from top to bottom when adding (to use previous line for alignment),
-        // but from bottom to top when removing (to avoid offset issues)
-        if (shouldRemove) {
-            for (lineNum in endLine downTo startLine) {
-                removeCommentFromLine(document, lineNum, config)
-            }
-        } else {
-            for (lineNum in startLine..endLine) {
-                addCommentToLine(document, lineNum, config)
-            }
         }
     }
     
@@ -196,8 +250,24 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     }
     
     /**
+     * Checks if a line is empty using document offsets (more efficient).
+     */
+    private fun isEmptyLine(document: Document, lineNum: Int): Boolean {
+        val lineStart = document.getLineStartOffset(lineNum)
+        val lineEnd = document.getLineEndOffset(lineNum)
+        val chars = document.charsSequence
+        for (i in lineStart until lineEnd) {
+            val c = chars[i]
+            if (c != ' ' && c != '\t') {
+                return false
+            }
+        }
+        return true
+    }
+    
+    /**
      * Checks if a line has any of the configured comment prefixes.
-     * Checks both at column 0 and after leading whitespace.
+     * Always checks after leading whitespace for detection (regardless of insert position).
      */
     private fun hasAnyCommentPrefix(lineText: String, config: CommentConfiguration): Boolean {
         // Check at column 0
@@ -212,8 +282,9 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     
     /**
      * Finds which comment prefix (if any) is present on a line and its position.
-     * Returns a Pair of (comment prefix, position after leading whitespace).
-     * Position is the number of leading whitespace characters before the comment.
+     * Detection is always based on the first non-whitespace character,
+     * regardless of the configured insert position.
+     * Returns a Pair of (comment prefix, position).
      */
     private fun findCommentPrefixWithPosition(lineText: String, config: CommentConfiguration): Pair<String, Int>? {
         // Check longest prefixes first to handle cases like "//" and "///"
@@ -261,8 +332,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      */
     private fun findPreviousNonEmptyLine(document: Document, lineNum: Int): Int {
         for (i in (lineNum - 1) downTo 0) {
-            val text = getLineText(document, i)
-            if (!isEmptyLine(text)) {
+            if (!isEmptyLine(document, i)) {
                 return i
             }
         }
@@ -276,76 +346,105 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         val prevLineNum = findPreviousNonEmptyLine(document, lineNum)
         if (prevLineNum < 0) return ""
         
-        val prevLineText = getLineText(document, prevLineNum)
-        return prevLineText.takeWhile { it.isWhitespace() }
+        val lineStart = document.getLineStartOffset(prevLineNum)
+        val lineEnd = document.getLineEndOffset(prevLineNum)
+        val chars = document.charsSequence
+        
+        var offset = lineStart
+        while (offset < lineEnd) {
+            val c = chars[offset]
+            if (c != ' ' && c != '\t') break
+            offset++
+        }
+        
+        return chars.subSequence(lineStart, offset).toString()
     }
     
     /**
      * Adds a comment to a line.
-     * For ALIGN_WITH_PREVIOUS mode, looks at the first non-empty line above to find alignment.
+     * For ALIGN_WITH_PREVIOUS mode, uses either the tracked column from consecutive execution
+     * or looks at the first non-empty line above to find alignment.
+     * Returns the column where the comment was inserted (for tracking).
      */
     private fun addCommentToLine(
         document: Document, 
         lineNum: Int, 
-        config: CommentConfiguration
-    ) {
+        config: CommentConfiguration,
+        trackedColumn: Int?
+    ): Int? {
         val lineStartOffset = document.getLineStartOffset(lineNum)
         val lineEndOffset = document.getLineEndOffset(lineNum)
         val lineText = document.getText(com.intellij.openapi.util.TextRange(lineStartOffset, lineEndOffset))
         
         // Check if line is empty and skipEmptyLines is enabled
         if (isEmptyLine(lineText) && config.skipEmptyLines) {
-            return
+            return trackedColumn
         }
         
         val commentToAdd = config.getPrimaryComment()
-        if (commentToAdd.isEmpty()) return
+        if (commentToAdd.isEmpty()) return trackedColumn
         
-        val newText = when (config.insertPosition) {
+        val (newText, usedColumn) = when (config.insertPosition) {
             InsertPosition.FIRST_COLUMN -> {
                 // Add comment at the beginning of the line
-                commentToAdd + lineText
+                Pair(commentToAdd + lineText, 0)
             }
             InsertPosition.AFTER_WHITESPACE -> {
                 // Add comment after leading whitespace
                 val leadingWhitespace = lineText.takeWhile { it.isWhitespace() }
                 val rest = lineText.drop(leadingWhitespace.length)
-                leadingWhitespace + commentToAdd + rest
+                Pair(leadingWhitespace + commentToAdd + rest, leadingWhitespace.length)
             }
             InsertPosition.ALIGN_WITH_PREVIOUS -> {
                 // Handle empty lines with indentEmptyLines option
-                if (isEmptyLine(lineText) && config.indentEmptyLines) {
+                if (isEmptyLine(lineText) && config.indentEmptyLines && trackedColumn != null) {
+                    // Use tracked column and add appropriate indent
                     val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
-                    previousIndent + commentToAdd
-                } else {
-                    // Look at the first non-empty line above to find comment position
-                    val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
-                    val previousLineColumn = if (prevNonEmptyLine >= 0) {
-                        findCommentColumnInLine(document, prevNonEmptyLine, config)
+                    val indent = if (trackedColumn <= previousIndent.length) {
+                        previousIndent.take(trackedColumn)
                     } else {
-                        -1
+                        previousIndent + " ".repeat(trackedColumn - previousIndent.length)
+                    }
+                    Pair(indent + commentToAdd, trackedColumn)
+                } else if (isEmptyLine(lineText) && config.indentEmptyLines) {
+                    val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
+                    Pair(previousIndent + commentToAdd, previousIndent.length)
+                } else {
+                    // Determine the target column
+                    val previousLineColumn = if (trackedColumn != null) {
+                        // Use tracked column from consecutive execution
+                        trackedColumn
+                    } else {
+                        // Look at the first non-empty line above to find comment position
+                        val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
+                        if (prevNonEmptyLine >= 0) {
+                            findCommentColumnInLine(document, prevNonEmptyLine, config)
+                        } else {
+                            -1
+                        }
                     }
                     
                     val leadingWhitespaceLength = lineText.takeWhile { it.isWhitespace() }.length
                     val firstNonWhitespaceColumn = leadingWhitespaceLength
                     
                     val targetColumn = if (previousLineColumn < 0) {
-                        // Previous non-empty line has no comment, use after whitespace behavior
+                        // No previous column, use after whitespace behavior
                         firstNonWhitespaceColumn
                     } else {
-                        // Use previous line's comment column, but shift left if line content starts before it
+                        // Use previous column, but shift left if line content starts before it
                         minOf(previousLineColumn, firstNonWhitespaceColumn)
                     }
                     
                     // Build the new line with comment at target column
                     val leadingPart = lineText.take(targetColumn)
                     val rest = lineText.drop(targetColumn)
-                    leadingPart + commentToAdd + rest
+                    Pair(leadingPart + commentToAdd + rest, targetColumn)
                 }
             }
         }
         
         document.replaceString(lineStartOffset, lineEndOffset, newText)
+        return usedColumn
     }
     
     /**

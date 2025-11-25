@@ -16,7 +16,6 @@ class CustomCommentTest : BasePlatformTestCase() {
             CommentConfiguration(
                 commentStrings = mutableListOf("// TODO: ", "// FIXME: ", "// NOTE: "),
                 fileExtensions = mutableSetOf("txt"),
-                languageId = "",
                 insertPosition = InsertPosition.FIRST_COLUMN
             )
         )

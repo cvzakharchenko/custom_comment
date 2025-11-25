@@ -1,9 +1,10 @@
 package com.github.cvzakharchenko.customcomment.settings
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.components.service
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.intellij.util.xmlb.annotations.OptionTag
 import com.intellij.util.xmlb.annotations.XCollection
@@ -37,14 +38,8 @@ data class CommentConfiguration(
     var languageId: String = "",
     var insertPosition: InsertPosition = InsertPosition.FIRST_COLUMN,
     var indentEmptyLines: Boolean = false,
-    var skipEmptyLines: Boolean = false,
-    // Legacy field for backwards compatibility - will be migrated on load
-    @Deprecated("Use insertPosition instead")
-    var insertAtFirstColumn: Boolean = true
+    var skipEmptyLines: Boolean = false
 ) {
-    // No-arg constructor for serialization
-    constructor() : this(mutableListOf(), mutableSetOf(), "", InsertPosition.FIRST_COLUMN, false, false, true)
-    
     /**
      * Returns the primary comment string (the one to add).
      */
@@ -90,15 +85,13 @@ data class CommentConfiguration(
      * Creates a deep copy of this configuration.
      */
     fun copy(): CommentConfiguration {
-        @Suppress("DEPRECATION")
         return CommentConfiguration(
             commentStrings = commentStrings.toMutableList(),
             fileExtensions = fileExtensions.toMutableSet(),
             languageId = languageId,
             insertPosition = insertPosition,
             indentEmptyLines = indentEmptyLines,
-            skipEmptyLines = skipEmptyLines,
-            insertAtFirstColumn = insertAtFirstColumn
+            skipEmptyLines = skipEmptyLines
         )
     }
 }
@@ -110,23 +103,30 @@ data class CommentConfiguration(
     name = "CustomCommentSettings",
     storages = [Storage("CustomCommentSettings.xml")]
 )
+@Service(Service.Level.APP)
 class CustomCommentSettings : PersistentStateComponent<CustomCommentSettings> {
     
     @OptionTag
     @XCollection(style = XCollection.Style.v2)
     var configurations: MutableList<CommentConfiguration> = mutableListOf()
     
+    init {
+        // Provide sensible defaults to make the plugin usable out of the box
+        if (configurations.isEmpty()) {
+            configurations.add(
+                CommentConfiguration(
+                    commentStrings = mutableListOf("// "),
+                    fileExtensions = mutableSetOf("c", "cpp", "cc", "cxx", "h", "hpp", "hh"),
+                    insertPosition = InsertPosition.AFTER_WHITESPACE
+                )
+            )
+        }
+    }
+    
     override fun getState(): CustomCommentSettings = this
     
     override fun loadState(state: CustomCommentSettings) {
         XmlSerializerUtil.copyBean(state, this)
-        // Migrate legacy insertAtFirstColumn to insertPosition
-        configurations.forEach { config ->
-            @Suppress("DEPRECATION")
-            if (config.insertPosition == InsertPosition.FIRST_COLUMN && !config.insertAtFirstColumn) {
-                config.insertPosition = InsertPosition.AFTER_WHITESPACE
-            }
-        }
     }
     
     /**
@@ -149,8 +149,6 @@ class CustomCommentSettings : PersistentStateComponent<CustomCommentSettings> {
     
     companion object {
         @JvmStatic
-        fun getInstance(): CustomCommentSettings {
-            return ApplicationManager.getApplication().getService(CustomCommentSettings::class.java)
-        }
+        fun getInstance(): CustomCommentSettings = service()
     }
 }

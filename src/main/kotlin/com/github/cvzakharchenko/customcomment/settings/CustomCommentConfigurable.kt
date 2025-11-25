@@ -77,7 +77,7 @@ class CustomCommentConfigurable : Configurable {
             <b>Insert Position modes:</b><br>
             • <b>First column</b>: Insert comment at column 0<br>
             • <b>After whitespace</b>: Insert comment after leading whitespace<br>
-            • <b>Align with previous</b>: Insert at same column as previous line's comment (or earlier if line starts before)
+            • <b>Align with previous</b>: Insert at same column as previous line's comment (maintains alignment across consecutive invocations)
             </html>
         """.trimIndent()
         
