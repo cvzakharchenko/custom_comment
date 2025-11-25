@@ -249,17 +249,22 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
             }
         }
         
-        // Find the minimum leading whitespace across all selected lines (excluding empty lines if skipEmptyLines)
+        // Find the minimum leading whitespace across all selected lines
         for (lineNum in sortedLines) {
             val lineText = getLineText(document, lineNum)
             
-            // Skip empty lines if configured to skip them
-            if (isEmptyLine(lineText) && config.skipEmptyLines) {
-                continue
-            }
-            
-            // For non-empty lines, we can't insert past the leading whitespace
-            if (!isEmptyLine(lineText)) {
+            if (isEmptyLine(lineText)) {
+                // Skip empty lines if configured to skip them
+                if (config.skipEmptyLines) {
+                    continue
+                }
+                // If indentEmptyLines is enabled, empty lines will use the calculated column
+                // Otherwise, empty lines have 0 whitespace, so targetColumn must be 0
+                if (!config.indentEmptyLines) {
+                    targetColumn = 0
+                }
+            } else {
+                // For non-empty lines, we can't insert past the leading whitespace
                 val lineWhitespace = lineText.takeWhile { it.isWhitespace() }.length
                 targetColumn = minOf(targetColumn, lineWhitespace)
             }
