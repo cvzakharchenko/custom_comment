@@ -1,7 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <id>com.github.cvzakharchenko.customcomment</id>
-    <name>custom_comment</name>
+    <name>Custom Comment</name>
     <vendor>cvzakharchenko</vendor>
 
     <depends>com.intellij.modules.platform</depends>
@@ -9,7 +9,26 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.cvzakharchenko.customcomment.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.cvzakharchenko.customcomment.startup.MyProjectActivity" />
+        <!-- Application-level settings service -->
+        <applicationService 
+            serviceImplementation="com.github.cvzakharchenko.customcomment.settings.CustomCommentSettings"/>
+        
+        <!-- Settings configurable -->
+        <applicationConfigurable 
+            parentId="editor"
+            instance="com.github.cvzakharchenko.customcomment.settings.CustomCommentConfigurable"
+            id="com.github.cvzakharchenko.customcomment.settings.CustomCommentConfigurable"
+            displayName="Custom Comment"/>
     </extensions>
+
+    <actions>
+        <!-- Toggle Custom Comment Action -->
+        <action id="com.github.cvzakharchenko.customcomment.ToggleCustomComment"
+                class="com.github.cvzakharchenko.customcomment.actions.ToggleCustomCommentAction"
+                text="Toggle Custom Comment"
+                description="Toggle custom comment on selected lines">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt SEMICOLON"/>
+        </action>
+    </actions>
 </idea-plugin>
