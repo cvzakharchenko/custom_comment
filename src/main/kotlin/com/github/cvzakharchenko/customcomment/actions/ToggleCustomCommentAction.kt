@@ -573,24 +573,17 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         
         // Handle empty lines with indentEmptyLines option
         val (newText, usedColumn) = if (isEmptyLine(lineText) && config.alignWithPrevious && config.indentEmptyLines) {
-            // For multi-line selection, use the multiLineColumn; otherwise calculate from previous
-            val emptyLineColumn = multiLineColumn ?: run {
-                val prevColumn = trackedColumn ?: run {
-                    val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
-                    if (prevNonEmptyLine >= 0) {
-                        val col = findCommentColumnInLine(document, prevNonEmptyLine, config)
-                        if (col >= 0) col else {
-                            val prevIndent = getPreviousNonEmptyLineIndent(document, lineNum)
-                            prevIndent.length
-                        }
-                    } else {
-                        getBaseInsertColumn(config, 0)
-                    }
+            // For multi-line selection, use multiLineColumn; for single-line, use tracked or lookup
+            // Note: Empty lines don't have a "base column" to shift left from, so we use the
+            // previous column directly (this is the whole point of indentEmptyLines)
+            val emptyLineColumn = multiLineColumn ?: trackedColumn ?: run {
+                val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
+                if (prevNonEmptyLine >= 0) {
+                    val col = findCommentColumnInLine(document, prevNonEmptyLine, config)
+                    if (col >= 0) col else getPreviousNonEmptyLineIndent(document, lineNum).length
+                } else {
+                    0  // No previous line, use column 0
                 }
-                
-                // Use previous column, but only shift left from base
-                val baseColumn = getBaseInsertColumn(config, 0)
-                minOf(prevColumn, baseColumn).coerceAtLeast(0)
             }
             
             val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
