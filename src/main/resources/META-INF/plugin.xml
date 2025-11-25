@@ -9,7 +9,19 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.cvzakharchenko.customcomment.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.cvzakharchenko.customcomment.startup.MyProjectActivity" />
+        <!-- Settings page -->
+        <applicationConfigurable
+                id="com.github.cvzakharchenko.customcomment.settings"
+                displayName="Custom Comment"
+                instance="com.github.cvzakharchenko.customcomment.settings.CustomCommentConfigurable"/>
     </extensions>
+
+    <actions>
+        <action id="com.github.cvzakharchenko.customcomment.ToggleCustomCommentAction"
+                class="com.github.cvzakharchenko.customcomment.actions.ToggleCustomCommentAction"
+                text="Toggle Custom Comment"
+                description="Toggle a custom configurable comment prefix on selected lines">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
