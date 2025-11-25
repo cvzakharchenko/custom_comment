@@ -131,6 +131,10 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         val document = editor.document
         val caretModel = editor.caretModel
         
+        // Pre-sort comment strings by length (descending) once for all operations
+        // This avoids O(K log K) sorting on every line
+        val sortedComments = config.commentStrings.sortedByDescending { it.length }
+        
         // Collect all unique lines from all carets
         val allLines = mutableSetOf<Int>()
         var firstLineOfFirstCaret: Int? = null
@@ -171,15 +175,15 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         // Determine action based on first line of first caret
         // When onlyDetectUpToAlignColumn is enabled, we may limit detection based on alignment
         val shouldRemove = if (config.onlyDetectUpToAlignColumn) {
-            val detectColumn = getDetectColumn(document, firstLineOfFirstCaret, config, currentColumn)
+            val detectColumn = getDetectColumn(document, firstLineOfFirstCaret, config, currentColumn, sortedComments)
             if (detectColumn != null) {
-                hasAnyCommentPrefixUpToColumn(getLineText(document, firstLineOfFirstCaret), config, detectColumn)
+                hasAnyCommentPrefixUpToColumn(getLineText(document, firstLineOfFirstCaret), sortedComments, detectColumn)
             } else {
                 // No limit - detect anywhere
-                hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), config)
+                hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), sortedComments)
             }
         } else {
-            hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), config)
+            hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), sortedComments)
         }
         
         // Process all unique lines
@@ -188,20 +192,20 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
             resetAlignmentState()
             // Process from bottom to top to avoid offset issues
             for (lineNum in allLines.sortedDescending()) {
-                removeCommentFromLine(document, lineNum, config)
+                removeCommentFromLine(document, lineNum, config, sortedComments)
             }
         } else {
             // For multiple lines, find the leftmost insert position that works for all lines
             val sortedLines = allLines.sorted()
             val multiLineColumn = if (sortedLines.size > 1) {
-                calculateMultiLineInsertColumn(document, sortedLines, config, currentColumn)
+                calculateMultiLineInsertColumn(document, sortedLines, config, currentColumn, sortedComments)
             } else {
                 null // Single line - use normal per-line logic
             }
             
             // Process from top to bottom
             for (lineNum in sortedLines) {
-                currentColumn = addCommentToLine(document, lineNum, config, currentColumn, multiLineColumn)
+                currentColumn = addCommentToLine(document, lineNum, config, currentColumn, multiLineColumn, sortedComments)
             }
             // Save alignment state for next invocation (only if alignWithPrevious is enabled)
             if (config.alignWithPrevious) {
@@ -223,7 +227,8 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         document: Document,
         sortedLines: List<Int>,
         config: CommentConfiguration,
-        trackedColumn: Int?
+        trackedColumn: Int?,
+        sortedComments: List<String>
     ): Int {
         val firstLine = sortedLines.first()
         val firstLineText = getLineText(document, firstLine)
@@ -237,7 +242,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
             val prevColumn = trackedColumn ?: run {
                 val prevNonEmptyLine = findPreviousNonEmptyLine(document, firstLine)
                 if (prevNonEmptyLine >= 0) {
-                    findCommentColumnInLine(document, prevNonEmptyLine, config)
+                    findCommentColumnInLine(document, prevNonEmptyLine, sortedComments)
                 } else {
                     -1
                 }
@@ -284,7 +289,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      * 
      * @return The column limit for detection, or null to detect anywhere
      */
-    private fun getDetectColumn(document: Document, lineNum: Int, config: CommentConfiguration, trackedColumn: Int?): Int? {
+    private fun getDetectColumn(document: Document, lineNum: Int, config: CommentConfiguration, trackedColumn: Int?, sortedComments: List<String>): Int? {
         // The "only detect" restriction only makes sense with alignment enabled
         if (!config.alignWithPrevious) {
             return null  // No limit - detect anywhere
@@ -298,7 +303,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         val prevColumn = trackedColumn ?: run {
             val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
             if (prevNonEmptyLine >= 0) {
-                findCommentColumnInLine(document, prevNonEmptyLine, config)
+                findCommentColumnInLine(document, prevNonEmptyLine, sortedComments)
             } else {
                 -1
             }
@@ -389,16 +394,19 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     /**
      * Checks if a line has any of the configured comment prefixes.
      * Always checks after leading whitespace for detection (regardless of insert position).
+     * 
+     * @param lineText The line text to check
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      */
-    private fun hasAnyCommentPrefix(lineText: String, config: CommentConfiguration): Boolean {
+    private fun hasAnyCommentPrefix(lineText: String, sortedComments: List<String>): Boolean {
         // Check at column 0
-        if (config.commentStrings.any { lineText.startsWith(it) }) {
+        if (sortedComments.any { lineText.startsWith(it) }) {
             return true
         }
         
         // Check after leading whitespace
         val trimmedText = lineText.trimStart()
-        return config.commentStrings.any { trimmedText.startsWith(it) }
+        return sortedComments.any { trimmedText.startsWith(it) }
     }
     
     /**
@@ -408,17 +416,17 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      * This is used when onlyDetectUpToAlignColumn is enabled.
      * 
      * @param lineText The line text to check
-     * @param config The comment configuration
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      * @param maxColumn The column to check up to (inclusive). If -1, checks the entire line.
      */
-    private fun hasAnyCommentPrefixUpToColumn(lineText: String, config: CommentConfiguration, maxColumn: Int): Boolean {
+    private fun hasAnyCommentPrefixUpToColumn(lineText: String, sortedComments: List<String>, maxColumn: Int): Boolean {
         // If maxColumn is -1 or negative, fall back to normal detection
         if (maxColumn < 0) {
-            return hasAnyCommentPrefix(lineText, config)
+            return hasAnyCommentPrefix(lineText, sortedComments)
         }
         
         // Check at column 0 (always within bounds if maxColumn >= 0)
-        if (config.commentStrings.any { lineText.startsWith(it) }) {
+        if (sortedComments.any { lineText.startsWith(it) }) {
             return true
         }
         
@@ -431,7 +439,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         }
         
         val textAfterWhitespace = lineText.drop(leadingWhitespaceLength)
-        return config.commentStrings.any { textAfterWhitespace.startsWith(it) }
+        return sortedComments.any { textAfterWhitespace.startsWith(it) }
     }
     
     /**
@@ -439,11 +447,11 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      * Detection is always based on the first non-whitespace character,
      * regardless of the configured insert position.
      * Returns a Pair of (comment prefix, position).
+     * 
+     * @param lineText The line text to check
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      */
-    private fun findCommentPrefixWithPosition(lineText: String, config: CommentConfiguration): Pair<String, Int>? {
-        // Check longest prefixes first to handle cases like "//" and "///"
-        val sortedComments = config.commentStrings.sortedByDescending { it.length }
-        
+    private fun findCommentPrefixWithPosition(lineText: String, sortedComments: List<String>): Pair<String, Int>? {
         // First check at column 0
         sortedComments.find { lineText.startsWith(it) }?.let {
             return Pair(it, 0)
@@ -465,13 +473,15 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      * Removes a comment from a line.
      * Removes the comment wherever it is found (at column 0 or after whitespace).
      * If trimEmptyLinesOnUncomment is enabled, also removes whitespace from lines that become empty.
+     * 
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      */
-    private fun removeCommentFromLine(document: Document, lineNum: Int, config: CommentConfiguration) {
+    private fun removeCommentFromLine(document: Document, lineNum: Int, config: CommentConfiguration, sortedComments: List<String>) {
         val lineStartOffset = document.getLineStartOffset(lineNum)
         val lineEndOffset = document.getLineEndOffset(lineNum)
         val lineText = document.getText(com.intellij.openapi.util.TextRange(lineStartOffset, lineEndOffset))
         
-        val (commentPrefix, position) = findCommentPrefixWithPosition(lineText, config) ?: return
+        val (commentPrefix, position) = findCommentPrefixWithPosition(lineText, sortedComments) ?: return
         
         // Remove the comment at the position where it was found
         var newText = lineText.substring(0, position) + lineText.substring(position + commentPrefix.length)
@@ -530,13 +540,16 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
      * 4. Also shift left if line content starts before the target column
      * 
      * Returns the column where the comment was inserted (for tracking).
+     * 
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      */
     private fun addCommentToLine(
         document: Document, 
         lineNum: Int, 
         config: CommentConfiguration,
         trackedColumn: Int?,
-        multiLineColumn: Int? = null
+        multiLineColumn: Int? = null,
+        sortedComments: List<String>
     ): Int? {
         val lineStartOffset = document.getLineStartOffset(lineNum)
         val lineEndOffset = document.getLineEndOffset(lineNum)
@@ -566,7 +579,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
                 val prevColumn = trackedColumn ?: run {
                     val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
                     if (prevNonEmptyLine >= 0) {
-                        findCommentColumnInLine(document, prevNonEmptyLine, config)
+                        findCommentColumnInLine(document, prevNonEmptyLine, sortedComments)
                     } else {
                         -1
                     }
@@ -590,7 +603,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
             val emptyLineColumn = multiLineColumn ?: trackedColumn ?: run {
                 val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
                 if (prevNonEmptyLine >= 0) {
-                    val col = findCommentColumnInLine(document, prevNonEmptyLine, config)
+                    val col = findCommentColumnInLine(document, prevNonEmptyLine, sortedComments)
                     if (col >= 0) col else getPreviousNonEmptyLineIndent(document, lineNum).length
                 } else {
                     0  // No previous line, use column 0
@@ -628,12 +641,14 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     /**
      * Finds the column where a comment starts in the given line.
      * Returns -1 if no comment is found.
+     * 
+     * @param sortedComments Comment strings pre-sorted by length (descending)
      */
-    private fun findCommentColumnInLine(document: Document, lineNum: Int, config: CommentConfiguration): Int {
+    private fun findCommentColumnInLine(document: Document, lineNum: Int, sortedComments: List<String>): Int {
         if (lineNum < 0 || lineNum >= document.lineCount) return -1
         
         val lineText = getLineText(document, lineNum)
-        val result = findCommentPrefixWithPosition(lineText, config)
+        val result = findCommentPrefixWithPosition(lineText, sortedComments)
         
         return result?.second ?: -1
     }
