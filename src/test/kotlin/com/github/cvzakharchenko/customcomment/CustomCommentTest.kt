@@ -44,7 +44,8 @@ class CustomCommentTest : BasePlatformTestCase() {
             commentStrings = mutableListOf("// A", "// B"),
             fileExtensions = mutableSetOf("cpp", "h"),
             languageId = "C++",
-            insertPosition = InsertPosition.AFTER_WHITESPACE
+            insertPosition = InsertPosition.AFTER_WHITESPACE,
+            alignWithPrevious = true
         )
         
         val copy = original.copy()
@@ -54,6 +55,7 @@ class CustomCommentTest : BasePlatformTestCase() {
         assertEquals(original.fileExtensions, copy.fileExtensions)
         assertEquals(original.languageId, copy.languageId)
         assertEquals(original.insertPosition, copy.insertPosition)
+        assertEquals(original.alignWithPrevious, copy.alignWithPrevious)
         
         // Verify it's a deep copy
         copy.commentStrings.add("// C")
@@ -83,16 +85,18 @@ class CustomCommentTest : BasePlatformTestCase() {
         )
         assertEquals("After whitespace", configAfterWhitespace.getPositionDisplayName())
         
-        val configAlignWithPrevious = CommentConfiguration(
-            insertPosition = InsertPosition.ALIGN_WITH_PREVIOUS
+        val configWithAlign = CommentConfiguration(
+            insertPosition = InsertPosition.AFTER_WHITESPACE,
+            alignWithPrevious = true
         )
-        assertEquals("Align with previous", configAlignWithPrevious.getPositionDisplayName())
+        assertEquals("After whitespace + Align", configWithAlign.getPositionDisplayName())
     }
     
     fun testEmptyLineOptions() {
         val configWithOptions = CommentConfiguration(
             commentStrings = mutableListOf("// "),
-            insertPosition = InsertPosition.ALIGN_WITH_PREVIOUS,
+            insertPosition = InsertPosition.AFTER_WHITESPACE,
+            alignWithPrevious = true,
             indentEmptyLines = true,
             skipEmptyLines = false
         )

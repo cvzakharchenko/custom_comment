@@ -153,10 +153,6 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         
         if (allLines.isEmpty() || firstLineOfFirstCaret == null) return
         
-        // Determine action based on first line of first caret
-        val firstLineText = getLineText(document, firstLineOfFirstCaret)
-        val shouldRemove = hasAnyCommentPrefix(firstLineText, config)
-        
         // Check if we're continuing from the previous invocation (consecutive line)
         val minLine = allLines.minOrNull() ?: return
         val maxLine = allLines.maxOrNull() ?: return
@@ -165,11 +161,25 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
                          lastLineIndex != null &&
                          minLine == lastLineIndex!! + 1
         
-        // Get the starting column for alignment
-        var currentColumn: Int? = if (continuing && config.insertPosition == InsertPosition.ALIGN_WITH_PREVIOUS) {
+        // Get the starting column for alignment (only when alignWithPrevious is enabled)
+        var currentColumn: Int? = if (continuing && config.alignWithPrevious) {
             lastAlignedColumn
         } else {
             null
+        }
+        
+        // Determine action based on first line of first caret
+        // When onlyDetectUpToAlignColumn is enabled, we may limit detection based on alignment
+        val shouldRemove = if (config.onlyDetectUpToAlignColumn) {
+            val detectColumn = getDetectColumn(document, firstLineOfFirstCaret, config, currentColumn)
+            if (detectColumn != null) {
+                hasAnyCommentPrefixUpToColumn(getLineText(document, firstLineOfFirstCaret), config, detectColumn)
+            } else {
+                // No limit - detect anywhere
+                hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), config)
+            }
+        } else {
+            hasAnyCommentPrefix(getLineText(document, firstLineOfFirstCaret), config)
         }
         
         // Process all unique lines
@@ -181,15 +191,121 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
                 removeCommentFromLine(document, lineNum, config)
             }
         } else {
-            // Process from top to bottom for proper alignment tracking
-            for (lineNum in allLines.sorted()) {
-                currentColumn = addCommentToLine(document, lineNum, config, currentColumn)
+            // For multiple lines, find the leftmost insert position that works for all lines
+            val sortedLines = allLines.sorted()
+            val multiLineColumn = if (sortedLines.size > 1) {
+                calculateMultiLineInsertColumn(document, sortedLines, config, currentColumn)
+            } else {
+                null // Single line - use normal per-line logic
             }
-            // Save alignment state for next invocation
-            lastAlignedColumn = currentColumn
-            lastFilePath = filePath
-            lastLineIndex = maxLine
+            
+            // Process from top to bottom
+            for (lineNum in sortedLines) {
+                currentColumn = addCommentToLine(document, lineNum, config, currentColumn, multiLineColumn)
+            }
+            // Save alignment state for next invocation (only if alignWithPrevious is enabled)
+            if (config.alignWithPrevious) {
+                lastAlignedColumn = currentColumn
+                lastFilePath = filePath
+                lastLineIndex = maxLine
+            } else {
+                resetAlignmentState()
+            }
         }
+    }
+    
+    /**
+     * Calculates the insert column for multi-line selection.
+     * All selected lines will receive comments at the same position - the leftmost that works for all.
+     * Honors alignment with previous line if applicable.
+     */
+    private fun calculateMultiLineInsertColumn(
+        document: Document,
+        sortedLines: List<Int>,
+        config: CommentConfiguration,
+        trackedColumn: Int?
+    ): Int {
+        val firstLine = sortedLines.first()
+        val firstLineText = getLineText(document, firstLine)
+        val firstLineWhitespace = firstLineText.takeWhile { it.isWhitespace() }.length
+        
+        // Start with base column for the first line
+        var targetColumn = getBaseInsertColumn(config, firstLineWhitespace)
+        
+        // Check for alignment with previous line (before the selection)
+        if (config.alignWithPrevious) {
+            val prevColumn = trackedColumn ?: run {
+                val prevNonEmptyLine = findPreviousNonEmptyLine(document, firstLine)
+                if (prevNonEmptyLine >= 0) {
+                    findCommentColumnInLine(document, prevNonEmptyLine, config)
+                } else {
+                    -1
+                }
+            }
+            
+            // Only shift left if previous comment is to the LEFT of target
+            if (prevColumn >= 0 && prevColumn < targetColumn) {
+                targetColumn = prevColumn
+            }
+        }
+        
+        // Find the minimum leading whitespace across all selected lines (excluding empty lines if skipEmptyLines)
+        for (lineNum in sortedLines) {
+            val lineText = getLineText(document, lineNum)
+            
+            // Skip empty lines if configured to skip them
+            if (isEmptyLine(lineText) && config.skipEmptyLines) {
+                continue
+            }
+            
+            // For non-empty lines, we can't insert past the leading whitespace
+            if (!isEmptyLine(lineText)) {
+                val lineWhitespace = lineText.takeWhile { it.isWhitespace() }.length
+                targetColumn = minOf(targetColumn, lineWhitespace)
+            }
+        }
+        
+        return targetColumn
+    }
+    
+    /**
+     * Gets the column up to which we should detect comments when onlyDetectUpToAlignColumn is enabled.
+     * Returns null if detection should not be limited (detect anywhere).
+     * 
+     * Logic:
+     * - The "only detect" restriction only applies when alignWithPrevious is enabled AND 
+     *   there's a previous comment that would cause alignment
+     * - Without alignment context, there's no reason to limit detection
+     * 
+     * @return The column limit for detection, or null to detect anywhere
+     */
+    private fun getDetectColumn(document: Document, lineNum: Int, config: CommentConfiguration, trackedColumn: Int?): Int? {
+        // The "only detect" restriction only makes sense with alignment enabled
+        if (!config.alignWithPrevious) {
+            return null  // No limit - detect anywhere
+        }
+        
+        val lineText = getLineText(document, lineNum)
+        val leadingWhitespaceLength = lineText.takeWhile { it.isWhitespace() }.length
+        val baseColumn = getBaseInsertColumn(config, leadingWhitespaceLength)
+        
+        // Get previous line's comment column
+        val prevColumn = trackedColumn ?: run {
+            val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
+            if (prevNonEmptyLine >= 0) {
+                findCommentColumnInLine(document, prevNonEmptyLine, config)
+            } else {
+                -1
+            }
+        }
+        
+        // If no previous comment, no limit
+        if (prevColumn < 0) {
+            return null
+        }
+        
+        // Return the alignment column (minimum of base and previous - only shift left)
+        return minOf(baseColumn, prevColumn)
     }
     
     /**
@@ -281,6 +397,39 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     }
     
     /**
+     * Checks if a line has any of the configured comment prefixes, but only up to the specified column.
+     * Comments that start strictly after the maxColumn are ignored.
+     * Comments at exactly maxColumn are still detected (so they can be removed).
+     * This is used when onlyDetectUpToAlignColumn is enabled.
+     * 
+     * @param lineText The line text to check
+     * @param config The comment configuration
+     * @param maxColumn The column to check up to (inclusive). If -1, checks the entire line.
+     */
+    private fun hasAnyCommentPrefixUpToColumn(lineText: String, config: CommentConfiguration, maxColumn: Int): Boolean {
+        // If maxColumn is -1 or negative, fall back to normal detection
+        if (maxColumn < 0) {
+            return hasAnyCommentPrefix(lineText, config)
+        }
+        
+        // Check at column 0 (always within bounds if maxColumn >= 0)
+        if (config.commentStrings.any { lineText.startsWith(it) }) {
+            return true
+        }
+        
+        // Check after leading whitespace, but only if the comment would start at or before maxColumn
+        val leadingWhitespaceLength = lineText.takeWhile { it.isWhitespace() }.length
+        
+        // If the first non-whitespace character is strictly after maxColumn, no comment in range
+        if (leadingWhitespaceLength > maxColumn) {
+            return false
+        }
+        
+        val textAfterWhitespace = lineText.drop(leadingWhitespaceLength)
+        return config.commentStrings.any { textAfterWhitespace.startsWith(it) }
+    }
+    
+    /**
      * Finds which comment prefix (if any) is present on a line and its position.
      * Detection is always based on the first non-whitespace character,
      * regardless of the configured insert position.
@@ -362,15 +511,21 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     
     /**
      * Adds a comment to a line.
-     * For ALIGN_WITH_PREVIOUS mode, uses either the tracked column from consecutive execution
-     * or looks at the first non-empty line above to find alignment.
+     * 
+     * Logic:
+     * 1. If multiLineColumn is provided, use it (for consistent multi-line positioning)
+     * 2. Otherwise, start with base insert column from Insert Position setting
+     * 3. If alignWithPrevious is enabled AND previous line's comment is MORE TO THE LEFT, shift left
+     * 4. Also shift left if line content starts before the target column
+     * 
      * Returns the column where the comment was inserted (for tracking).
      */
     private fun addCommentToLine(
         document: Document, 
         lineNum: Int, 
         config: CommentConfiguration,
-        trackedColumn: Int?
+        trackedColumn: Int?,
+        multiLineColumn: Int? = null
     ): Int? {
         val lineStartOffset = document.getLineStartOffset(lineNum)
         val lineEndOffset = document.getLineEndOffset(lineNum)
@@ -384,67 +539,86 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         val commentToAdd = config.getPrimaryComment()
         if (commentToAdd.isEmpty()) return trackedColumn
         
-        val (newText, usedColumn) = when (config.insertPosition) {
-            InsertPosition.FIRST_COLUMN -> {
-                // Add comment at the beginning of the line
-                Pair(commentToAdd + lineText, 0)
-            }
-            InsertPosition.AFTER_WHITESPACE -> {
-                // Add comment after leading whitespace
-                val leadingWhitespace = lineText.takeWhile { it.isWhitespace() }
-                val rest = lineText.drop(leadingWhitespace.length)
-                Pair(leadingWhitespace + commentToAdd + rest, leadingWhitespace.length)
-            }
-            InsertPosition.ALIGN_WITH_PREVIOUS -> {
-                // Handle empty lines with indentEmptyLines option
-                if (isEmptyLine(lineText) && config.indentEmptyLines && trackedColumn != null) {
-                    // Use tracked column and add appropriate indent
-                    val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
-                    val indent = if (trackedColumn <= previousIndent.length) {
-                        previousIndent.take(trackedColumn)
+        val leadingWhitespaceLength = lineText.takeWhile { it.isWhitespace() }.length
+        
+        // Determine target column
+        val targetColumn = if (multiLineColumn != null) {
+            // Multi-line selection: use pre-calculated column (already accounts for all lines)
+            minOf(multiLineColumn, leadingWhitespaceLength)
+        } else {
+            // Single line or per-line calculation
+            val baseColumn = getBaseInsertColumn(config, leadingWhitespaceLength)
+            var column = baseColumn
+            
+            if (config.alignWithPrevious) {
+                // Get previous line's comment column
+                val prevColumn = trackedColumn ?: run {
+                    val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
+                    if (prevNonEmptyLine >= 0) {
+                        findCommentColumnInLine(document, prevNonEmptyLine, config)
                     } else {
-                        previousIndent + " ".repeat(trackedColumn - previousIndent.length)
+                        -1
                     }
-                    Pair(indent + commentToAdd, trackedColumn)
-                } else if (isEmptyLine(lineText) && config.indentEmptyLines) {
-                    val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
-                    Pair(previousIndent + commentToAdd, previousIndent.length)
-                } else {
-                    // Determine the target column
-                    val previousLineColumn = if (trackedColumn != null) {
-                        // Use tracked column from consecutive execution
-                        trackedColumn
-                    } else {
-                        // Look at the first non-empty line above to find comment position
-                        val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
-                        if (prevNonEmptyLine >= 0) {
-                            findCommentColumnInLine(document, prevNonEmptyLine, config)
-                        } else {
-                            -1
-                        }
-                    }
-                    
-                    val leadingWhitespaceLength = lineText.takeWhile { it.isWhitespace() }.length
-                    val firstNonWhitespaceColumn = leadingWhitespaceLength
-                    
-                    val targetColumn = if (previousLineColumn < 0) {
-                        // No previous column, use after whitespace behavior
-                        firstNonWhitespaceColumn
-                    } else {
-                        // Use previous column, but shift left if line content starts before it
-                        minOf(previousLineColumn, firstNonWhitespaceColumn)
-                    }
-                    
-                    // Build the new line with comment at target column
-                    val leadingPart = lineText.take(targetColumn)
-                    val rest = lineText.drop(targetColumn)
-                    Pair(leadingPart + commentToAdd + rest, targetColumn)
+                }
+                
+                // Only shift left if previous comment is to the LEFT of base column
+                if (prevColumn >= 0 && prevColumn < column) {
+                    column = prevColumn
                 }
             }
+            
+            // Respect line content - can't insert into non-whitespace
+            minOf(column, leadingWhitespaceLength)
+        }
+        
+        // Handle empty lines with indentEmptyLines option
+        val (newText, usedColumn) = if (isEmptyLine(lineText) && config.alignWithPrevious && config.indentEmptyLines) {
+            // For multi-line selection, use the multiLineColumn; otherwise calculate from previous
+            val emptyLineColumn = multiLineColumn ?: run {
+                val prevColumn = trackedColumn ?: run {
+                    val prevNonEmptyLine = findPreviousNonEmptyLine(document, lineNum)
+                    if (prevNonEmptyLine >= 0) {
+                        val col = findCommentColumnInLine(document, prevNonEmptyLine, config)
+                        if (col >= 0) col else {
+                            val prevIndent = getPreviousNonEmptyLineIndent(document, lineNum)
+                            prevIndent.length
+                        }
+                    } else {
+                        getBaseInsertColumn(config, 0)
+                    }
+                }
+                
+                // Use previous column, but only shift left from base
+                val baseColumn = getBaseInsertColumn(config, 0)
+                minOf(prevColumn, baseColumn).coerceAtLeast(0)
+            }
+            
+            val previousIndent = getPreviousNonEmptyLineIndent(document, lineNum)
+            val indent = if (emptyLineColumn <= previousIndent.length) {
+                previousIndent.take(emptyLineColumn)
+            } else {
+                previousIndent + " ".repeat(emptyLineColumn - previousIndent.length)
+            }
+            Pair(indent + commentToAdd, emptyLineColumn)
+        } else {
+            // Build the new line with comment at target column
+            val leadingPart = lineText.take(targetColumn)
+            val rest = lineText.drop(targetColumn)
+            Pair(leadingPart + commentToAdd + rest, targetColumn)
         }
         
         document.replaceString(lineStartOffset, lineEndOffset, newText)
         return usedColumn
+    }
+    
+    /**
+     * Gets the base insert column based on the insertPosition setting.
+     */
+    private fun getBaseInsertColumn(config: CommentConfiguration, leadingWhitespaceLength: Int): Int {
+        return when (config.insertPosition) {
+            InsertPosition.FIRST_COLUMN -> 0
+            InsertPosition.AFTER_WHITESPACE -> leadingWhitespaceLength
+        }
     }
     
     /**

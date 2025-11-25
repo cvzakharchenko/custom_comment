@@ -16,9 +16,7 @@ enum class InsertPosition {
     /** Insert at column 0 */
     FIRST_COLUMN,
     /** Insert after leading whitespace */
-    AFTER_WHITESPACE,
-    /** Insert at the same column as the previous comment, or earlier if line content starts before */
-    ALIGN_WITH_PREVIOUS
+    AFTER_WHITESPACE
 }
 
 /**
@@ -28,17 +26,23 @@ enum class InsertPosition {
  *                         all of them are checked when removing.
  * @property fileExtensions Set of file extensions (without dot) where this config applies.
  * @property languageId Optional language ID (e.g., "JAVA", "kotlin"). If set, takes precedence over extensions.
- * @property insertPosition The position mode for inserting comments.
- * @property indentEmptyLines When true and using ALIGN_WITH_PREVIOUS, add indent to empty lines matching previous line.
+ * @property insertPosition The position mode for inserting comments (used for first line or when alignWithPrevious is disabled).
+ * @property alignWithPrevious When true, subsequent lines align with the previous line's comment column.
+ * @property indentEmptyLines When true and alignWithPrevious is enabled, add indent to empty lines matching previous line.
  * @property skipEmptyLines When true, don't add comments to empty lines.
+ * @property onlyDetectUpToAlignColumn When true, only detect existing comments up to the insert column.
+ *                                     If alignWithPrevious is enabled, uses previous line's comment column.
+ *                                     Otherwise uses the configured insert position column.
  */
 data class CommentConfiguration(
     var commentStrings: MutableList<String> = mutableListOf(),
     var fileExtensions: MutableSet<String> = mutableSetOf(),
     var languageId: String = "",
     var insertPosition: InsertPosition = InsertPosition.FIRST_COLUMN,
+    var alignWithPrevious: Boolean = false,
     var indentEmptyLines: Boolean = false,
-    var skipEmptyLines: Boolean = false
+    var skipEmptyLines: Boolean = false,
+    var onlyDetectUpToAlignColumn: Boolean = false
 ) {
     /**
      * Returns the primary comment string (the one to add).
@@ -74,11 +78,11 @@ data class CommentConfiguration(
      * Returns a display string for the insert position.
      */
     fun getPositionDisplayName(): String {
-        return when (insertPosition) {
+        val base = when (insertPosition) {
             InsertPosition.FIRST_COLUMN -> "First column"
             InsertPosition.AFTER_WHITESPACE -> "After whitespace"
-            InsertPosition.ALIGN_WITH_PREVIOUS -> "Align with previous"
         }
+        return if (alignWithPrevious) "$base + Align" else base
     }
     
     /**
@@ -90,8 +94,10 @@ data class CommentConfiguration(
             fileExtensions = fileExtensions.toMutableSet(),
             languageId = languageId,
             insertPosition = insertPosition,
+            alignWithPrevious = alignWithPrevious,
             indentEmptyLines = indentEmptyLines,
-            skipEmptyLines = skipEmptyLines
+            skipEmptyLines = skipEmptyLines,
+            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumn
         )
     }
 }
@@ -117,7 +123,8 @@ class CustomCommentSettings : PersistentStateComponent<CustomCommentSettings> {
                 CommentConfiguration(
                     commentStrings = mutableListOf("// "),
                     fileExtensions = mutableSetOf("c", "cpp", "cc", "cxx", "h", "hpp", "hh"),
-                    insertPosition = InsertPosition.AFTER_WHITESPACE
+                    insertPosition = InsertPosition.AFTER_WHITESPACE,
+                    alignWithPrevious = true
                 )
             )
         }

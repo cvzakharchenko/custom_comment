@@ -74,10 +74,14 @@ class CustomCommentConfigurable : Configurable {
             • Language ID (if set) takes precedence over file extensions<br>
             • Common language IDs: JAVA, kotlin, TEXT, ObjectiveC, C++, Python, JavaScript, TypeScript<br>
             <br>
-            <b>Insert Position modes:</b><br>
+            <b>Insert Position:</b><br>
             • <b>First column</b>: Insert comment at column 0<br>
             • <b>After whitespace</b>: Insert comment after leading whitespace<br>
-            • <b>Align with previous</b>: Insert at same column as previous line's comment (maintains alignment across consecutive invocations)
+            <br>
+            <b>Align with previous:</b><br>
+            • When enabled, aligns comments with the previous line's comment column<br>
+            • Uses Insert Position for the first line (when no previous comment exists)<br>
+            • Maintains alignment across consecutive invocations
             </html>
         """.trimIndent()
         
@@ -128,8 +132,10 @@ class CustomCommentConfigurable : Configurable {
             a.fileExtensions != b.fileExtensions ||
             a.languageId != b.languageId ||
             a.insertPosition != b.insertPosition ||
+            a.alignWithPrevious != b.alignWithPrevious ||
             a.indentEmptyLines != b.indentEmptyLines ||
-            a.skipEmptyLines != b.skipEmptyLines
+            a.skipEmptyLines != b.skipEmptyLines ||
+            a.onlyDetectUpToAlignColumn != b.onlyDetectUpToAlignColumn
         }
     }
     
@@ -187,7 +193,6 @@ private data class InsertPositionItem(val position: InsertPosition) {
     override fun toString(): String = when (position) {
         InsertPosition.FIRST_COLUMN -> "First column"
         InsertPosition.AFTER_WHITESPACE -> "After whitespace"
-        InsertPosition.ALIGN_WITH_PREVIOUS -> "Align with previous"
     }
 }
 
@@ -215,13 +220,17 @@ private class ConfigurationEditDialog(
     private val insertPositionCombo = ComboBox(
         arrayOf(
             InsertPositionItem(InsertPosition.FIRST_COLUMN),
-            InsertPositionItem(InsertPosition.AFTER_WHITESPACE),
-            InsertPositionItem(InsertPosition.ALIGN_WITH_PREVIOUS)
+            InsertPositionItem(InsertPosition.AFTER_WHITESPACE)
         )
     ).apply {
         val currentPosition = existingConfig?.insertPosition ?: InsertPosition.FIRST_COLUMN
         selectedItem = InsertPositionItem(currentPosition)
     }
+    
+    private val alignWithPreviousCheckbox = JBCheckBox(
+        MyBundle.message("settings.alignWithPrevious"),
+        existingConfig?.alignWithPrevious ?: false
+    )
     
     private val indentEmptyLinesCheckbox = JBCheckBox(
         MyBundle.message("settings.indentEmptyLines"),
@@ -231,6 +240,11 @@ private class ConfigurationEditDialog(
     private val skipEmptyLinesCheckbox = JBCheckBox(
         MyBundle.message("settings.skipEmptyLines"),
         existingConfig?.skipEmptyLines ?: false
+    )
+    
+    private val onlyDetectUpToAlignColumnCheckbox = JBCheckBox(
+        MyBundle.message("settings.onlyDetectUpToAlignColumn"),
+        existingConfig?.onlyDetectUpToAlignColumn ?: false
     )
     
     init {
@@ -252,11 +266,13 @@ private class ConfigurationEditDialog(
             .addLabeledComponent(JBLabel(MyBundle.message("settings.languageId")), languageIdField)
             .addLabeledComponent(JBLabel(MyBundle.message("settings.fileExtensions")), extensionsField)
             .addLabeledComponent(JBLabel(MyBundle.message("settings.insertPosition")), insertPositionCombo)
+            .addComponent(alignWithPreviousCheckbox)
             .addComponent(indentEmptyLinesCheckbox)
             .addComponent(skipEmptyLinesCheckbox)
+            .addComponent(onlyDetectUpToAlignColumnCheckbox)
             .addComponentFillVertically(JPanel(), 0)
             .panel.apply {
-                preferredSize = Dimension(500, 350)
+                preferredSize = Dimension(500, 400)
             }
     }
     
@@ -286,8 +302,10 @@ private class ConfigurationEditDialog(
             fileExtensions = extensions,
             languageId = languageId,
             insertPosition = selectedPosition,
+            alignWithPrevious = alignWithPreviousCheckbox.isSelected,
             indentEmptyLines = indentEmptyLinesCheckbox.isSelected,
-            skipEmptyLines = skipEmptyLinesCheckbox.isSelected
+            skipEmptyLines = skipEmptyLinesCheckbox.isSelected,
+            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumnCheckbox.isSelected
         )
     }
 }
