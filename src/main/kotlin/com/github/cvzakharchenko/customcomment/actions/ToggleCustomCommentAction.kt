@@ -459,6 +459,7 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     /**
      * Removes a comment from a line.
      * Removes the comment wherever it is found (at column 0 or after whitespace).
+     * If trimEmptyLinesOnUncomment is enabled, also removes whitespace from lines that become empty.
      */
     private fun removeCommentFromLine(document: Document, lineNum: Int, config: CommentConfiguration) {
         val lineStartOffset = document.getLineStartOffset(lineNum)
@@ -468,7 +469,12 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
         val (commentPrefix, position) = findCommentPrefixWithPosition(lineText, config) ?: return
         
         // Remove the comment at the position where it was found
-        val newText = lineText.substring(0, position) + lineText.substring(position + commentPrefix.length)
+        var newText = lineText.substring(0, position) + lineText.substring(position + commentPrefix.length)
+        
+        // If the line is now empty (only whitespace) and trimEmptyLinesOnUncomment is enabled, trim it
+        if (config.trimEmptyLinesOnUncomment && newText.isBlank()) {
+            newText = ""
+        }
         
         if (newText != lineText) {
             document.replaceString(lineStartOffset, lineEndOffset, newText)

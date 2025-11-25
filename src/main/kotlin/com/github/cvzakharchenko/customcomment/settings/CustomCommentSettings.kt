@@ -33,6 +33,7 @@ enum class InsertPosition {
  * @property onlyDetectUpToAlignColumn When true, only detect existing comments up to the insert column.
  *                                     If alignWithPrevious is enabled, uses previous line's comment column.
  *                                     Otherwise uses the configured insert position column.
+ * @property trimEmptyLinesOnUncomment When true, remove all whitespace from lines that become empty after uncommenting.
  */
 data class CommentConfiguration(
     var commentStrings: MutableList<String> = mutableListOf(),
@@ -42,7 +43,8 @@ data class CommentConfiguration(
     var alignWithPrevious: Boolean = false,
     var indentEmptyLines: Boolean = false,
     var skipEmptyLines: Boolean = false,
-    var onlyDetectUpToAlignColumn: Boolean = false
+    var onlyDetectUpToAlignColumn: Boolean = false,
+    var trimEmptyLinesOnUncomment: Boolean = true
 ) {
     /**
      * Returns the primary comment string (the one to add).
@@ -97,7 +99,8 @@ data class CommentConfiguration(
             alignWithPrevious = alignWithPrevious,
             indentEmptyLines = indentEmptyLines,
             skipEmptyLines = skipEmptyLines,
-            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumn
+            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumn,
+            trimEmptyLinesOnUncomment = trimEmptyLinesOnUncomment
         )
     }
 }

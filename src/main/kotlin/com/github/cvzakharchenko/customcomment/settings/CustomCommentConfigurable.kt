@@ -135,7 +135,8 @@ class CustomCommentConfigurable : Configurable {
             a.alignWithPrevious != b.alignWithPrevious ||
             a.indentEmptyLines != b.indentEmptyLines ||
             a.skipEmptyLines != b.skipEmptyLines ||
-            a.onlyDetectUpToAlignColumn != b.onlyDetectUpToAlignColumn
+            a.onlyDetectUpToAlignColumn != b.onlyDetectUpToAlignColumn ||
+            a.trimEmptyLinesOnUncomment != b.trimEmptyLinesOnUncomment
         }
     }
     
@@ -247,6 +248,11 @@ private class ConfigurationEditDialog(
         existingConfig?.onlyDetectUpToAlignColumn ?: false
     )
     
+    private val trimEmptyLinesOnUncommentCheckbox = JBCheckBox(
+        MyBundle.message("settings.trimEmptyLinesOnUncomment"),
+        existingConfig?.trimEmptyLinesOnUncomment ?: true
+    )
+    
     init {
         title = if (existingConfig == null) 
             MyBundle.message("settings.addConfiguration") 
@@ -270,9 +276,10 @@ private class ConfigurationEditDialog(
             .addComponent(indentEmptyLinesCheckbox)
             .addComponent(skipEmptyLinesCheckbox)
             .addComponent(onlyDetectUpToAlignColumnCheckbox)
+            .addComponent(trimEmptyLinesOnUncommentCheckbox)
             .addComponentFillVertically(JPanel(), 0)
             .panel.apply {
-                preferredSize = Dimension(500, 400)
+                preferredSize = Dimension(500, 420)
             }
     }
     
@@ -305,7 +312,8 @@ private class ConfigurationEditDialog(
             alignWithPrevious = alignWithPreviousCheckbox.isSelected,
             indentEmptyLines = indentEmptyLinesCheckbox.isSelected,
             skipEmptyLines = skipEmptyLinesCheckbox.isSelected,
-            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumnCheckbox.isSelected
+            onlyDetectUpToAlignColumn = onlyDetectUpToAlignColumnCheckbox.isSelected,
+            trimEmptyLinesOnUncomment = trimEmptyLinesOnUncommentCheckbox.isSelected
         )
     }
 }
