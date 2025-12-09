@@ -3,10 +3,12 @@ package com.github.cvzakharchenko.customcomment.actions
 import com.github.cvzakharchenko.customcomment.settings.CommentConfiguration
 import com.github.cvzakharchenko.customcomment.settings.CustomCommentSettings
 import com.github.cvzakharchenko.customcomment.settings.InsertPosition
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Caret
 import com.intellij.openapi.editor.Document
@@ -53,31 +55,37 @@ class ToggleCustomCommentAction : AnAction(), DumbAware {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
     
     override fun update(e: AnActionEvent) {
-        val project = e.project
         val editor = e.getData(CommonDataKeys.EDITOR)
-        val file = e.getData(CommonDataKeys.VIRTUAL_FILE)
         
-        // Enable only when we have a valid editor and matching configuration
-        val hasConfiguration = if (project != null && editor != null && file != null) {
-            findConfiguration(editor, file) != null
-        } else {
-            false
-        }
-        
-        e.presentation.isEnabledAndVisible = hasConfiguration
+        // Enable when we have a valid editor - if no custom config exists, we'll fallback to IDE native comment
+        e.presentation.isEnabledAndVisible = editor != null
+    }
+    
+    /**
+     * Falls back to the IDE's native "Comment with Line Comment" action.
+     * This is used when there's no custom configuration for the current file type.
+     */
+    private fun fallbackToNativeLineComment(e: AnActionEvent) {
+        val action = ActionManager.getInstance().getAction(IdeActions.ACTION_COMMENT_LINE)
+        action?.actionPerformed(e)
     }
     
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
-        val file = e.getData(CommonDataKeys.VIRTUAL_FILE) ?: return
+        val file = e.getData(CommonDataKeys.VIRTUAL_FILE)
         
-        val config = findConfiguration(editor, file) ?: return
+        // If no file or no custom configuration, fallback to IDE native line comment
+        val config = if (file != null) findConfiguration(editor, file) else null
+        if (config == null) {
+            fallbackToNativeLineComment(e)
+            return
+        }
         
         // Check if we should move to next line after action
         // Only move if there's a single cursor with no selection
         val shouldMoveToNextLine = shouldMoveCaretAfterAction(editor)
-        val filePath = file.path
+        val filePath = file!!.path
         
         WriteCommandAction.runWriteCommandAction(project) {
             processAllCarets(project, editor, config, filePath)
